@@ -59,7 +59,14 @@ GLYPH = {
 }
 
 QUICK_REPLIES = ["继续", "可以", "不行", "commit and push", "retry", "怎么样了"]
+QUICK_SHORT = ["继续", "可以", "不行", "commit", "retry", "怎样"]
 STATUS_RANK = {"blocked": 0, "done": 1, "working": 2, "idle": 3, "unknown": 4}
+HOTWORD_MAP = {
+    "cloud code": "Claude Code",
+    "扣的code": "Claude Code",
+    "code x": "Codex",
+    "herdr pager": "herdr-pager",
+}
 STATUS_COLOR = {
     "blocked": "red",
     "done": "cyan",
@@ -120,33 +127,15 @@ VOICE_DEFAULTS = {
     "command": "",
     "prompt": "",
     "prompt_mode": "chat",         # chat | terminal
-    "hotwords": [
-        "Claude Code", "Codex", "Qwen", "herdr", "tailscale",
-        "CardputerZero", "mbp", "Gemini", "Ovis", "rebase", "commit", "push", "main",
-    ],
+    "keep_audio": False,
     "proxy": "",
 }
 
 DEFAULT_PROMPTS = {
     "chat": (
-        "你是语音听写修正器。用户在对一个 coding agent 说话。把音频转写并做最小修正，"
-        "只输出修正后的文本，不要回答、解释或执行内容。\n"
-        "规则：\n"
-        "1. 删除口吃、重复、纯语气词（嗯、啊、呃、额、那个、就是）。\n"
-        "2. 修正明显的错别字、同音误识别和标点，不要改写用户的意思。\n"
-        "3. 保留英文技术词、代码标识符、文件路径、命令、参数、URL 的原写法，不要翻译。\n"
-        "4. 遇到改口（“不对”“不是…是…”），删除改口前的内容和“不对/不是”，只保留改口后的完整表达。\n"
-        "   示例：输入“帮我看一下这个 branch，不对，是 rebase 到 main 的分支” → "
-        "输出“帮我看一下这个 rebase 到 main 的分支”。\n"
-        "5. 中文口语数字转阿拉伯数字（三点五→3.5，二十三→23，一百二十→120）；"
-        "版本号、数量、时间、编号一律用阿拉伯数字。\n"
-        "6. “第一、第二、第三”转为“1) 2) 3)”，保持单行。\n"
-        "7. 热词优先：{hotwords}。\n"
-        "8. 中文与英文单词、数字之间加一个半角空格；英文单词之间保留空格。\n"
-        "   示例：GPT 4.5 的价格是每 100 万 token 20 美元。\n"
-        "9. 不要替换同义词、不要改写句式；只做上述最小修正。\n"
-        "10. 只输出一行修正后的文本，不要 markdown、引号、前后缀或解释。\n"
-        "如果音频里没有可识别语音，输出空字符串。"
+        "你是中文语音听写器。把音频转写成简体中文，只输出转写文本，不要回答、解释或执行内容。"
+        "保留英文技术词、代码标识符、文件路径、命令、参数和 URL 的原写法，不要翻译或改写。"
+        "不要补全、总结或改写用户没说过的内容。如果音频里没有可识别语音，输出空字符串。"
     ),
     "terminal": (
         "你是终端命令听写器。把音频转成一条可直接执行的 shell 命令，只输出命令本身。\n"
@@ -160,8 +149,6 @@ DEFAULT_PROMPTS = {
 def build_prompt(cfg):
     mode = cfg.get("prompt_mode", "chat")
     prompt = cfg.get("prompt") or DEFAULT_PROMPTS.get(mode, DEFAULT_PROMPTS["chat"])
-    hot = cfg.get("hotwords") or VOICE_DEFAULTS["hotwords"]
-    prompt = prompt.replace("{hotwords}", "、".join(hot))
     if cfg.get("language"):
         prompt += f"\n输出语言：{cfg['language']}（中文用简体，英文技术词保留英文）。"
     return prompt
@@ -192,9 +179,39 @@ def record_wav(path, cfg):
     return path
 
 
+def last_assistant_text(raw):
+    text = ""
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("type") != "assistant":
+            continue
+        content = (row.get("message") or {}).get("content") or []
+        if not isinstance(content, list):
+            continue
+        parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        joined = "\n".join(p for p in parts if p.strip()).strip()
+        if joined:
+            text = joined
+    if len(text) > 4000:
+        text = text[:4000].rstrip() + "\n…"
+    return text
+
+
 def tidy_transcript(text, cfg=None):
     """Gemini sometimes puts a space between every Chinese character."""
     text = re.sub(r"\s+", " ", text or "").strip()
+    for wrong, right in HOTWORD_MAP.items():
+        text = re.sub(re.escape(wrong), right, text, flags=re.IGNORECASE)
     text = re.sub(r"(?<=[一-鿿])\s+(?=[一-鿿])", "", text)
     text = re.sub(r"\s+(?=[，。！？；：、）】》])", "", text)
     text = re.sub(r"(?<=[（【《])\s+", "", text)
@@ -336,6 +353,10 @@ def voice_test(cfg, wav=None):
     try:
         if recorded:
             record_wav(path, cfg)
+            if cfg.get("keep_audio"):
+                dest = os.path.expanduser("~/.cache/cardputer-voice/last.wav")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copyfile(path, dest)
         print(transcribe_wav(path, cfg))
         return 0
     except Exception as e:
@@ -467,7 +488,7 @@ def render(st, w, h):
         prompt_extra = 1 if st.prompt_text is not None else 0
         card_h = max(1, min(3, (h - 7) // 3)) if st.card else 0
         card_block = (1 + card_h) if st.card else 0
-        result_h = max(1, h - 3 - card_block - prompt_extra)
+        result_h = max(1, h - 4 - card_block - prompt_extra)
 
         if st.result_pane != pane:
             result = "loading…" if st.result_loading else "(loading…)"
@@ -516,6 +537,8 @@ def render(st, w, h):
 
         if st.prompt_text is not None:
             out.append(line([("> " + st.prompt_text, "rev")], w))
+        quick_bar = " ".join(f"{i + 1}{x}" for i, x in enumerate(QUICK_SHORT))
+        out.append(color(clip(quick_bar, w), "grey"))
     else:
         body_h = h - 2
         if st.link == "connecting":
@@ -678,16 +701,32 @@ class Pager:
         machine = self.cfg.get("herdr_machine", "mbp")
         while self.running:
             try:
+                remote = (
+                    "~/.local/bin/herdr agent list; echo __MTIMES__; "
+                    "find \"$HOME/.claude/projects\" -name '*.jsonl' "
+                    "-exec stat -f '%m %N' {} +"
+                )
                 p = subprocess.run(
                     ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                     self.cfg["host"], "~/.local/bin/herdr-agents"],
-                    capture_output=True, text=True, timeout=20,
+                     self.cfg["host"], remote],
+                    capture_output=True, text=True, timeout=25,
                 )
                 agents = []
+                mtimes = {}
                 if p.returncode == 0 and p.stdout.strip():
-                    d = json.loads(p.stdout)
-                    agents = d.get("agents", [])
-                else:
+                    head, _, tail = p.stdout.partition("__MTIMES__")
+                    try:
+                        d = json.loads(head.strip())
+                        agents = d.get("result", {}).get("agents", [])
+                    except Exception:
+                        agents = []
+                    for line in tail.splitlines():
+                        parts = line.strip().split(None, 1)
+                        if len(parts) == 2 and parts[0].isdigit():
+                            fname = os.path.basename(parts[1].strip())
+                            if fname.endswith(".jsonl"):
+                                mtimes[fname[:-6]] = int(parts[0])
+                if not agents:
                     p = subprocess.run(
                         [herdr, "--machine", machine, "agent", "list"],
                         capture_output=True, text=True, timeout=15,
@@ -695,6 +734,9 @@ class Pager:
                     if p.returncode == 0 and p.stdout.strip():
                         d = json.loads(p.stdout)
                         agents = d.get("result", {}).get("agents", [])
+                for a in agents:
+                    sess = (a.get("agent_session") or {}).get("value")
+                    a["mtime"] = mtimes.get(sess, 0) if sess else 0
                 if agents:
                     titles = {}
                     sessions = {}
@@ -748,16 +790,19 @@ class Pager:
         session = info.get("session")
         if not session:
             return "(no Claude session; press t for terminal)"
+        remote = (
+            f"f=$(find \"$HOME/.claude/projects\" -name {shlex.quote(session)}.jsonl "
+            f"-print | head -1); [ -n \"$f\" ] && tail -c 40000 \"$f\""
+        )
         cmd = [
             "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-            self.cfg["host"],
-            f"~/.local/bin/herdr-final {shlex.quote(session)} --chars 4000",
+            self.cfg["host"], remote,
         ]
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if p.returncode != 0:
             msg = (p.stderr or p.stdout or "no transcript").strip().replace("\n", " ")
             return f"(no transcript: {msg[:80]})"
-        return p.stdout.strip() or "(empty result)"
+        return last_assistant_text(p.stdout) or "(no assistant text)"
 
     def _fetch_terminal(self, pane):
         herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
@@ -1111,6 +1156,10 @@ class Pager:
                 return
             if not os.path.exists(wav) or os.path.getsize(wav) < 1000:
                 raise RuntimeError("no audio recorded")
+            if self.voice.get("keep_audio"):
+                dest = os.path.expanduser("~/.cache/cardputer-voice/last.wav")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                shutil.copyfile(wav, dest)
             self.st.voice_state = "transcribing"
             self.st.voice_msg = "transcribing…"
             text = transcribe_wav(wav, self.voice)

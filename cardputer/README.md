@@ -48,25 +48,23 @@ prompt, or approve/deny:
 RESULT [transcript] gemini
 最后一条 assistant 文本…
 STATUS gemini
-i int  j jump  Esc
+1继续 2可以 3不行 4commit 5retry 6怎样
+i stop  j focus  Esc
 ```
 
 Agents with a Claude session open in transcript mode; agents without one open
 in terminal mode automatically. `t` switches between transcript and terminal;
-`f/x` (or Up/Down) and `[` / `]` scroll the result. The transcript view is read
-from Claude Code's session JSONL on the Mac by
-[`herdr_final.py`](herdr_final.py), and the list's mtime sort uses
-[`herdr_agents.py`](herdr_agents.py). Both run on the Mac; installing them is
-one command each:
+`f/x` (or Up/Down) and `[` / `]` scroll the result.
 
-```sh
-install -m 755 cardputer/herdr_final.py ~/.local/bin/herdr-final
-install -m 755 cardputer/herdr_agents.py ~/.local/bin/herdr-agents
-```
+There are no helper files or services on the Mac. The client uses the existing
+SSH connection and standard commands:
 
-`herdr-agents` is polled once per five seconds in place of the previous
-`herdr --machine … agent list`, so it adds no extra request. If it is missing,
-the client falls back to the state-change time.
+- transcript: `find ~/.claude/projects -name <session>.jsonl` then
+  `tail -c 40000`; the last assistant text is parsed on the device
+- mtime sort: the five-second poll runs `herdr agent list` and
+  `find … -exec stat -f '%m %N'` in the same SSH command
+
+The only Mac-side binary remains the existing `pager-bridge`.
 
 | glyph | meaning |
 |---|---|
@@ -112,8 +110,10 @@ is `chat-audio` with `gemini-3.1-flash-lite` on `https://cnapi.kksj.org/v1`;
 each dictation costs about $0.0001. The recording is converted to MP3 with
 `ffmpeg` before upload (about 1/5 the bytes), then cleaned of spaces between
 Chinese characters. Transient network resets are retried once, with a 45 s cap.
-The built-in prompt follows OpenTypeless' correction rules (fillers, hotwords,
-numbers, self-corrections, spacing); see [`voice.md`](voice.md).
+The built-in prompt is a concise **verbatim** transcriber (no filler removal or
+number rewriting, which biased the model); a few deterministic hotword fixes
+run after ASR. Set `keep_audio: true` to keep the last recording at
+`~/.cache/cardputer-voice/last.wav` for debugging. See [`voice.md`](voice.md).
 
 After transcription the text stays in the prompt line: Enter sends it to the
 selected agent, Esc cancels it. Pressing Esc while `transcribing` does not

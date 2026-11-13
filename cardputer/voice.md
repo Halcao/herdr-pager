@@ -13,23 +13,23 @@ nano ~/.config/herdr-pager-client/voice.json
 
 ## Prompt
 
-The built-in chat prompt is modeled on OpenTypeless' `推荐提示词.md` and Ovis'
-polish prompt:
+The default is a **concise verbatim transcriber**, deliberately short to avoid
+the model "correcting" or rewriting speech:
 
-- remove fillers/stutters (嗯、啊、呃、额、那个、就是) and repetitions
-- fix homophones and punctuation; do not rewrite the sentence
-- preserve identifiers, paths, commands, flags, URLs and English terms
-- merge self-corrections (“不对，是…” → keep only the corrected part)
-- convert spoken numbers to Arabic numerals (三点五→3.5, 一百二十→120)
-- turn “第一、第二、第三” into “1) 2) 3)”, one line
-- use the hotword list (Claude Code, Codex, Qwen, herdr, …)
-- put one half-width space between Chinese and Latin/digits
-- output only one line, no commentary or markdown
+- transcribe to Simplified Chinese; output only the transcript
+- keep English terms, identifiers, paths, commands, flags and URLs as spoken
+- do not answer, summarize, complete or rewrite what the user did not say
+- no commentary, markdown or code fences
 
-`"prompt": ""` uses this built-in. Put your own prompt in that field to
-override it. `prompt_mode` is `chat` (a message to a coding agent) or
-`terminal` (a shell command: no trailing period, no added capitals).
-`hotwords` is a JSON array; add project-specific names there.
+A few deterministic hotword fixes run after transcription (`cloud code` →
+`Claude Code`, `code x` → `Codex`, `herdr pager` → `herdr-pager`). These are
+post-processing, not prompt rules, so they don't bias the ASR.
+
+`"prompt": ""` uses the built-in. Put the longer OpenTypeless/Ovis correction
+rules in that field if you want them. `prompt_mode` is `chat` (a message to a
+coding agent) or `terminal` (a shell command: no trailing period). Set
+`keep_audio: true` to copy the last recording to
+`~/.cache/cardputer-voice/last.wav` for debugging.
 
 ## OpenTypeless (OpenAI-compatible ASR)
 

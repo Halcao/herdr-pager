@@ -13,7 +13,7 @@
   "command": "",
   "prompt": "",
   "prompt_mode": "chat",
-  "hotwords": ["Claude Code", "Codex", "Qwen", "herdr", "tailscale", "CardputerZero", "mbp", "Gemini", "Ovis", "rebase", "commit", "push", "main"],
+  "keep_audio": false,
   "proxy": "",
   "_notes": [
     "mode=openai: POST <base_url>/audio/transcriptions (OpenTypeless / OpenAI-compatible transcription).",
@@ -24,8 +24,10 @@
     "proxy: optional, e.g. http://100.64.0.30:7890 (the Mac's Clash) if capu can't reach the API directly.",
     "audio_format=mp3 converts the recording with ffmpeg (43KB instead of 221KB for 6s); wav keeps the raw file.",
     "max_record_seconds caps a toggle recording; the client retries transient curl failures twice.",
-    "prompt empty = built-in chat/terminal prompt (filler removal, hotwords, numbers, self-corrections).",
+    "prompt empty = built-in concise verbatim prompt; put your own prompt here to override.",
     "prompt_mode: chat (message to a coding agent) or terminal (shell command, no trailing period).",
+    "keep_audio: copy the last recording to ~/.cache/cardputer-voice/last.wav for debugging.",
+    "Hotword fixes (cloud code -> Claude Code, etc.) are deterministic post-processing, not prompt rules.",
     "Set enabled=true after filling the fields; test with: cardputer-pager --voice-test --wav file.wav"
   ]
 }
