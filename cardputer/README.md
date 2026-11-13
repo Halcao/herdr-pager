@@ -22,22 +22,32 @@ so there is no bridge SSH server, no USB pairing and no port 2277.
 
 ## Screen
 
-The list shows the agent's **terminal title** (from `herdr agent list`'s
-`terminal_title_stripped`), its folder, and a status glyph:
+The list is navigation only:
 
 ```
 OK                                12:34
 ×0 blocked ✓1 done ◐1 working ○6 idle
 ◐ 新 Linux 小节点 SSH、t   haocao
 ○ 多模态模型训练负载均衡  minicpm-lb
-RESULT [transcript] 新 Linux 小节点 SSH…
-最后一条 assistant 文本（不含 thinking/tool）
-Up/Down Enter  p/v/t  1-6 reply  q
+Up/Down select  Enter open  q quit
 ```
 
-`RESULT` is the selected agent's last assistant text by default. Press `t` to
-switch to the live terminal view; `[` / `]` scroll it. The transcript view is
-read from Claude Code's session JSONL on the Mac by
+Press `Enter` on an agent to open its detail screen. The detail screen shows
+the last assistant message (no thinking/tool calls), the permission/question
+card if herdr has one, and is the only place that can record voice, send a
+prompt, or approve/deny:
+
+```
+OK                                12:34
+×0 blocked ✓1 done ◐1 working ○6 idle
+RESULT [transcript] 新 Linux 小节点 SSH…
+最后一条 assistant 文本…
+STATUS 新 Linux 小节点 SSH…
+i interrupt  j jump  v/p 1-6 t  Esc
+```
+
+`t` switches the result between transcript and terminal; `[` / `]` scroll it.
+The transcript view is read from Claude Code's session JSONL on the Mac by
 [`herdr_final.py`](herdr_final.py), which must be installed there:
 
 ```sh
@@ -57,23 +67,29 @@ a name. The title comes from the pane's terminal.
 
 ## Keys
 
+**List**
+
 | key | action |
 |---|---|
 | Up / Down | move in the agent list |
-| Enter | send an armed quick reply, else open the selected agent's card |
-| `p` | type a prompt (ASCII) |
-| `v` | start recording; press `v` again to stop; then wait for the transcript |
-| `t` | toggle the result view: transcript ↔ terminal |
-| `[` / `]` | scroll the result view |
+| Enter | open the selected agent's detail |
+| `q` | quit |
+
+**Detail**
+
+| key | action |
+|---|---|
+| Up / Down, `[` / `]` | scroll the result |
+| `t` | toggle the result: transcript ↔ terminal |
+| `v` | start recording; press `v` again to stop |
+| `p` | type a prompt (ASCII); Enter sends |
 | `1`–`6` | arm a quick reply (继续 / 可以 / 不行 / commit and push / retry / 怎么样了); Enter sends, Esc cancels |
-| Enter | with a prompt: send it to the selected agent |
-| Esc | cancel the quick reply / prompt / card |
-| `a` | approve (press twice) |
+| `a` | approve (press twice), when the card offers it |
 | `d` | deny |
 | `i` | interrupt (press twice) |
 | `j` | jump to the pane in herdr |
-| `r` | request a fresh snapshot |
-| `q` | quit |
+| `r` | refresh the snapshot and the card |
+| Esc | close the detail / cancel a quick reply or prompt |
 
 ## Voice
 
@@ -101,11 +117,9 @@ cardputer-pager --voice-test --wav x.wav
 
 ## Current scope
 
-Implemented: agent list/status with terminal titles, last-assistant result view
-(transcript or terminal), permission cards, approve/deny/interrupt/jump,
-voice-to-prompt, a typed prompt, quick replies, and sending via
-`herdr agent prompt`.
+Implemented: status list with terminal titles; a detail screen per agent with
+the last assistant text (transcript or terminal), the permission/question card,
+voice-to-prompt, a typed prompt, quick replies, and approve/deny/interrupt/jump.
 
-`Enter` still opens the pager card (status/question/permission); the final
-answer is always visible in the `RESULT` panel, so the card is only for
-approvals and questions.
+The list never sends anything; all message and decision actions live in the
+detail screen. The result is fetched only while a detail screen is open.
