@@ -59,6 +59,7 @@ GLYPH = {
 }
 
 QUICK_REPLIES = ["继续", "可以", "不行", "commit and push", "retry", "怎么样了"]
+STATUS_RANK = {"blocked": 0, "done": 1, "working": 2, "idle": 3, "unknown": 4}
 STATUS_COLOR = {
     "blocked": "red",
     "done": "cyan",
@@ -439,35 +440,22 @@ def render(st, w, h):
     agents = snap.get("agents", [])
     herdr_off = snap.get("herdr") == "offline"
 
-    # status band
-    if st.link == "connected":
-        link = ("OK", "green")
-    elif st.link == "connecting":
-        link = ("LINK", "yellow")
-    else:
-        link = ("OFF", "red")
-
-    clock = time.strftime("%H:%M", time.localtime(st.now or time.time()))
-    left = [link]
+    # status band: only abnormal/transient states, no permanent OK
+    left = []
+    if st.link == "connecting":
+        left.append(("LINK", "yellow"))
+    elif st.link != "connected":
+        left.append(("OFF", "red"))
     if herdr_off:
         left.append((" HERDR OFFLINE", "red"))
     if st.msg:
         left.append((" " + st.msg, "yellow"))
     if st.voice_state != "idle" or st.voice_msg:
         left.append((" " + st.voice_msg, "cyan"))
+    clock = time.strftime("%H:%M", time.localtime(st.now or time.time()))
     band = line(left, w - 6) + color(pad(clock, 5), "grey") + " "
 
-    summary_parts = []
-    for key in ("blocked", "done", "working", "idle"):
-        if summary_parts:
-            summary_parts.append((" ", None))
-        n = st.count(key)
-        summary_parts.append((
-            f"{GLYPH[key]}{n} {key}",
-            STATUS_COLOR.get(key, "white") if n else "grey",
-        ))
-    status_line = line(summary_parts, w)
-    out = [band, status_line]
+    out = [band]
 
     if st.detail_pane:
         pane = st.detail_pane
@@ -477,7 +465,7 @@ def render(st, w, h):
         prompt_extra = 1 if st.prompt_text is not None else 0
         card_h = max(1, min(3, (h - 7) // 3)) if st.card else 0
         card_block = (1 + card_h) if st.card else 0
-        result_h = max(1, h - 4 - card_block - prompt_extra)
+        result_h = max(1, h - 3 - card_block - prompt_extra)
 
         if st.result_pane != pane:
             result = "loading…" if st.result_loading else "(loading…)"
@@ -519,7 +507,7 @@ def render(st, w, h):
             if "deny" in can:
                 hints.append("d deny")
             if "interrupt" in can:
-                hints.append("i" + (" INTERRUPT?" if st.armed == "interrupt" else " interrupt"))
+                hints.append("i" + (" INT?" if st.armed == "interrupt" else " int"))
             if "jump" in can:
                 hints.append("j jump")
             card_hint = "  ".join(hints)
@@ -527,29 +515,24 @@ def render(st, w, h):
         if st.prompt_text is not None:
             out.append(line([("> " + st.prompt_text, "rev")], w))
     else:
-        body_h = h - 3
-        if herdr_off:
+        body_h = h - 2
+        if st.link == "connecting":
+            out.append(line([("connecting…", "yellow")], w))
+        elif st.link != "connected":
+            out.append(line([("disconnected — retrying…", "red")], w))
+        elif herdr_off:
             out.append(line([("herdr is offline on " + st.host, "red")], w))
         elif not agents:
             out.append(line([("no agents", "grey")], w))
         else:
             vis = body_h
             first = st.first_visible(len(agents), vis)
-            at_w = min(10, max(0, (w - 3) // 3))
-            title_w = max(8, (w - 3) - at_w)
             for i in range(first, min(len(agents), first + vis)):
                 a = agents[i]
                 stt = a.get("st", "unknown")
                 g = GLYPH.get(stt, "?")
                 title = st.titles.get(a.get("pane")) or a.get("name") or a.get("pane", "")
-                at = a.get("at", "")
-                row = (
-                    color(pad(g, 1), STATUS_COLOR.get(stt, "white"))
-                    + " "
-                    + pad(title, title_w)
-                    + " "
-                    + pad(at, at_w)
-                )
+                row = color(pad(g, 1), STATUS_COLOR.get(stt, "white")) + " " + pad(title, w - 2)
                 if i == st.selected:
                     row = color(row, "rev")
                 out.append(row)
@@ -565,11 +548,11 @@ def render(st, w, h):
         hint = f'Enter send "{st.quick}"   Esc cancel'
     elif st.detail_pane:
         if card_hint:
-            hint = card_hint + "  v/p 1-6 t  Esc"
+            hint = card_hint + "  Esc"
         else:
-            hint = "v voice  p prompt  1-6 reply  t view  Esc back"
+            hint = "f/x scroll  t view  v/p 1-6  Esc back"
     else:
-        hint = "Up/Down select  Enter open  q quit"
+        hint = "f/x select  Enter open  q quit"
     if st.msg and time.time() - st.msg_at > 4:
         st.msg = ""
     out = out[: h - 1]
@@ -600,6 +583,8 @@ class State:
         self.pending = {}
         self.titles = {}
         self.sessions = {}
+        self.state_times = {}
+        self.last_state = {}
         self.detail_pane = None
         self.result_text = ""
         self.result_pane = None
@@ -616,6 +601,18 @@ class State:
     def say(self, text):
         self.msg = text
         self.msg_at = time.time()
+
+    def update_times(self, agents, now):
+        for a in agents:
+            pane = a.get("pane")
+            if not pane:
+                continue
+            sig = (a.get("st"), a.get("seq"))
+            if pane not in self.state_times:
+                self.state_times[pane] = a.get("since") or now
+            elif self.last_state.get(pane) != sig:
+                self.state_times[pane] = now
+            self.last_state[pane] = sig
 
     def count(self, kind):
         if not self.snap:
@@ -699,6 +696,7 @@ class Pager:
                             sess_obj = a.get("agent_session") or {}
                             sessions[pane] = {
                                 "session": sess_obj.get("value") if isinstance(sess_obj, dict) else None,
+                                "agent": a.get("agent") or "",
                                 "cwd": a.get("cwd") or "",
                             }
                     self.st.titles = titles
@@ -720,7 +718,7 @@ class Pager:
         info = self.st.sessions.get(pane) or {}
         session = info.get("session")
         if not session:
-            return "(no session id yet)"
+            return "(no Claude session; press t for terminal)"
         cmd = [
             "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
             self.cfg["host"],
@@ -757,6 +755,8 @@ class Pager:
         st.result_scroll = 0
         st.result_at = 0
         st.result_loading = True
+        info = st.sessions.get(pane) or {}
+        st.result_mode = "transcript" if info.get("session") else "terminal"
         self.show(pane, -1)
 
     def close_detail(self):
@@ -774,6 +774,11 @@ class Pager:
         while self.running:
             pane = self.st.detail_pane
             st = self.st
+            info = st.sessions.get(pane) if pane else None
+            if pane and info is not None and not info.get("session") and st.result_mode == "transcript":
+                st.result_mode = "terminal"
+                st.result_pane = None
+                st.result_text = ""
             if pane and (pane != st.result_pane or time.time() - st.result_at > 5):
                 if pane != st.result_pane:
                     st.result_pane = None
@@ -904,18 +909,36 @@ class Pager:
         t = m.get("t")
         if t == "hello":
             self.st.link = "connected"
-            self.st.say(f"bridge {m.get('bridge', '?')} @ {m.get('host', '?')}")
             self.st.now = m.get("now", 0) or self.st.now
         elif t == "snap":
             prev = self.st.snap
+            selected_pane = self._selected_pane()
+            agents = m.get("agents", [])
+            now = time.time()
+            self.st.update_times(agents, now)
+            agents = sorted(
+                agents,
+                key=lambda a: (
+                    STATUS_RANK.get(a.get("st"), 4),
+                    -self.st.state_times.get(a.get("pane"), 0),
+                ),
+            )
+            m["agents"] = agents
             self.st.snap = m
             self.st.now = m.get("now", self.st.now)
             self.st.link = "connected"
+            self.st.selected = 0
+            if selected_pane:
+                for i, a in enumerate(agents):
+                    if a.get("pane") == selected_pane:
+                        self.st.selected = i
+                        break
+            if agents:
+                self.st.selected = min(self.st.selected, len(agents) - 1)
+            else:
+                self.st.selected = 0
             self.after_snapshot(prev, m)
-            if self.st.selected >= len(m.get("agents", [])):
-                self.st.selected = max(0, len(m.get("agents", [])) - 1)
-            # a card's agent may have gone: close a stale card
-            panes = {a.get("pane") for a in m.get("agents", [])}
+            panes = {a.get("pane") for a in agents}
             if self.st.card and self.st.card.get("pane") not in panes:
                 self.st.card = None
         elif t == "card":
@@ -1132,6 +1155,10 @@ class Pager:
             return
 
         k = key.lower()
+        if k == "f":
+            k = "up"
+        elif k == "x":
+            k = "down"
         if k == "q":
             self.running = False
             return

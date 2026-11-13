@@ -22,14 +22,18 @@ so there is no bridge SSH server, no USB pairing and no port 2277.
 
 ## Screen
 
-The list is navigation only:
+The top band is empty in the normal case (only the clock). `LINK`, `OFF`,
+`HERDR OFFLINE`, `REC` and `STT` appear only when they matter.
+
+The list is navigation only. It is sorted **blocked > done > working > idle**;
+within a group the most recently active agent comes first. The title is the
+pane's terminal title, full width; the old trailing folder column is gone.
 
 ```
-OK                                12:34
-×0 blocked ✓1 done ◐1 working ○6 idle
-◐ 新 Linux 小节点 SSH、t   haocao
-○ 多模态模型训练负载均衡  minicpm-lb
-Up/Down select  Enter open  q quit
+                          12:34
+◐ 新 Linux 小节点 SSH、tailscale…
+○ 多模态模型训练负载均衡…
+f/x select  Enter open  q quit
 ```
 
 Press `Enter` on an agent to open its detail screen. The detail screen shows
@@ -38,16 +42,17 @@ card if herdr has one, and is the only place that can record voice, send a
 prompt, or approve/deny:
 
 ```
-OK                                12:34
-×0 blocked ✓1 done ◐1 working ○6 idle
-RESULT [transcript] 新 Linux 小节点 SSH…
+                          12:34
+RESULT [transcript] gemini
 最后一条 assistant 文本…
-STATUS 新 Linux 小节点 SSH…
-i interrupt  j jump  v/p 1-6 t  Esc
+STATUS gemini
+i int  j jump  Esc
 ```
 
-`t` switches the result between transcript and terminal; `[` / `]` scroll it.
-The transcript view is read from Claude Code's session JSONL on the Mac by
+Agents with a Claude session open in transcript mode; agents without one open
+in terminal mode automatically. `t` switches between transcript and terminal;
+`f/x` (or Up/Down) and `[` / `]` scroll the result. The transcript view is read
+from Claude Code's session JSONL on the Mac by
 [`herdr_final.py`](herdr_final.py), which must be installed there:
 
 ```sh
@@ -71,7 +76,7 @@ a name. The title comes from the pane's terminal.
 
 | key | action |
 |---|---|
-| Up / Down | move in the agent list |
+| `f` / `x` (or Up / Down) | move in the agent list |
 | Enter | open the selected agent's detail |
 | `q` | quit |
 
@@ -79,7 +84,7 @@ a name. The title comes from the pane's terminal.
 
 | key | action |
 |---|---|
-| Up / Down, `[` / `]` | scroll the result |
+| `f` / `x` (or Up / Down), `[` / `]` | scroll the result |
 | `t` | toggle the result: transcript ↔ terminal |
 | `v` | start recording; press `v` again to stop |
 | `p` | type a prompt (ASCII); Enter sends |
