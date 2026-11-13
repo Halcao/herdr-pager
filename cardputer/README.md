@@ -30,7 +30,18 @@ OK                                12:34
 ×0 blocked ✓1 done ◐1 working ○6 idle
 ◐ 新 Linux 小节点 SSH、t   haocao
 ○ 多模态模型训练负载均衡  minicpm-lb
-Up/Down  Enter open  v voice  q quit
+RESULT [transcript] 新 Linux 小节点 SSH…
+最后一条 assistant 文本（不含 thinking/tool）
+Up/Down Enter  p/v/t  1-6 reply  q
+```
+
+`RESULT` is the selected agent's last assistant text by default. Press `t` to
+switch to the live terminal view; `[` / `]` scroll it. The transcript view is
+read from Claude Code's session JSONL on the Mac by
+[`herdr_final.py`](herdr_final.py), which must be installed there:
+
+```sh
+install -m 755 cardputer/herdr_final.py ~/.local/bin/herdr-final
 ```
 
 | glyph | meaning |
@@ -49,10 +60,14 @@ a name. The title comes from the pane's terminal.
 | key | action |
 |---|---|
 | Up / Down | move in the agent list |
-| Enter | open the selected agent's card |
+| Enter | send an armed quick reply, else open the selected agent's card |
+| `p` | type a prompt (ASCII) |
 | `v` | start recording; press `v` again to stop; then wait for the transcript |
-| Enter | send the transcribed/typed prompt to the selected agent |
-| Esc | cancel the prompt / close the card |
+| `t` | toggle the result view: transcript ↔ terminal |
+| `[` / `]` | scroll the result view |
+| `1`–`6` | arm a quick reply (继续 / 可以 / 不行 / commit and push / retry / 怎么样了); Enter sends, Esc cancels |
+| Enter | with a prompt: send it to the selected agent |
+| Esc | cancel the quick reply / prompt / card |
 | `a` | approve (press twice) |
 | `d` | deny |
 | `i` | interrupt (press twice) |
@@ -86,9 +101,11 @@ cardputer-pager --voice-test --wav x.wav
 
 ## Current scope
 
-Implemented: agent list/status, permission cards, approve/deny/interrupt/jump,
-voice-to-prompt, prompt send via `herdr agent prompt`.
+Implemented: agent list/status with terminal titles, last-assistant result view
+(transcript or terminal), permission cards, approve/deny/interrupt/jump,
+voice-to-prompt, a typed prompt, quick replies, and sending via
+`herdr agent prompt`.
 
-Not yet implemented: the "last assistant text" result view and the
-transcript/terminal toggle. `Enter` on an agent still opens the pager card
-(status/question/permission), not the final answer.
+`Enter` still opens the pager card (status/question/permission); the final
+answer is always visible in the `RESULT` panel, so the card is only for
+approvals and questions.

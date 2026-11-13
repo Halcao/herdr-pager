@@ -57,6 +57,8 @@ GLYPH = {
     "unknown": "?",
     "idle": "○",
 }
+
+QUICK_REPLIES = ["继续", "可以", "不行", "commit and push", "retry", "怎么样了"]
 STATUS_COLOR = {
     "blocked": "red",
     "done": "cyan",
@@ -374,6 +376,23 @@ def pad(s, n):
     return s + " " * max(0, n - _dw(s))
 
 
+def wrap_text(text, width):
+    lines = []
+    for para in (text or "").splitlines() or [""]:
+        cur = ""
+        used = 0
+        for ch in para:
+            c = _cw(ch)
+            if used + c > width and cur:
+                lines.append(cur)
+                cur = ""
+                used = 0
+            cur += ch
+            used += c
+        lines.append(cur.rstrip())
+    return lines
+
+
 def color(text, name):
     if not name:
         return text
@@ -497,7 +516,11 @@ def render(st, w, h):
         elif not agents:
             out.append(line([("no agents", "grey")], w))
         else:
-            vis = body_h
+            prompt_extra = 1 if st.prompt_text is not None else 0
+            avail = max(2, h - 4 - prompt_extra)
+            result_h = max(2, min(8, avail // 2))
+            list_h = max(1, avail - result_h)
+            vis = list_h
             first = st.first_visible(len(agents), vis)
             at_w = min(10, max(0, (w - 3) // 3))
             title_w = max(8, (w - 3) - at_w)
@@ -518,6 +541,22 @@ def render(st, w, h):
                     row = color(row, "rev")
                 out.append(row)
 
+            pane = agents[st.selected].get("pane") if agents else None
+            sel_title = st.titles.get(pane) or st.agent_name(pane)
+            out.append(color(clip(
+                f"RESULT [{st.result_mode}] {sel_title}", w), "cyan"))
+            if pane is None:
+                result = "(no agent)"
+            elif st.result_pane != pane:
+                result = "loading…" if st.result_loading else "(loading…)"
+            else:
+                result = st.result_text or "(no result yet)"
+            lines = wrap_text(result, w)
+            max_scroll = max(0, len(lines) - result_h)
+            st.result_scroll = max(0, min(st.result_scroll, max_scroll))
+            for ln in lines[st.result_scroll:st.result_scroll + result_h]:
+                out.append(line([(ln, "white")], w))
+
     # prompt input replaces the bottom two rows
     if st.prompt_text is not None:
         out = out[: h - 2]
@@ -532,10 +571,12 @@ def render(st, w, h):
         hint = "REC — v stop   Esc cancel"
     elif st.voice_state == "transcribing":
         hint = "transcribing..."
+    elif st.quick:
+        hint = f'Enter send "{st.quick}"   Esc cancel'
     elif card:
         hint = card_hint
     else:
-        hint = "Up/Down  Enter open  v voice  q quit"
+        hint = "Up/Down Enter  p/v/t  1-6 reply  q"
     if st.msg and time.time() - st.msg_at > 4:
         st.msg = ""
     out = out[: h - 1]
@@ -565,6 +606,14 @@ class State:
         self.seen_done = set()
         self.pending = {}
         self.titles = {}
+        self.sessions = {}
+        self.result_text = ""
+        self.result_pane = None
+        self.result_mode = "transcript"
+        self.result_at = 0.0
+        self.result_scroll = 0
+        self.result_loading = False
+        self.quick = None
         self.prompt_text = None
         self.prompt_pane = None
         self.voice_state = "idle"   # idle | recording | transcribing
@@ -644,6 +693,7 @@ class Pager:
                     d = json.loads(p.stdout)
                     agents = d.get("result", {}).get("agents", [])
                     titles = {}
+                    sessions = {}
                     for a in agents:
                         pane = a.get("pane_id")
                         title = (a.get("terminal_title_stripped") or "").strip()
@@ -652,10 +702,77 @@ class Pager:
                             title = os.path.basename(cwd) or pane
                         if pane:
                             titles[pane] = title
+                            sess_obj = a.get("agent_session") or {}
+                            sessions[pane] = {
+                                "session": sess_obj.get("value") if isinstance(sess_obj, dict) else None,
+                                "cwd": a.get("cwd") or "",
+                            }
                     self.st.titles = titles
+                    self.st.sessions = sessions
             except Exception:
                 pass
             for _ in range(50):
+                if not self.running:
+                    return
+                time.sleep(0.1)
+
+    def _selected_pane(self):
+        agents = (self.st.snap or {}).get("agents", [])
+        if agents and 0 <= self.st.selected < len(agents):
+            return agents[self.st.selected].get("pane")
+        return None
+
+    def _fetch_transcript(self, pane):
+        info = self.st.sessions.get(pane) or {}
+        session = info.get("session")
+        if not session:
+            return "(no session id yet)"
+        cmd = [
+            "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+            self.cfg["host"],
+            f"~/.local/bin/herdr-final {shlex.quote(session)} --chars 4000",
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        if p.returncode != 0:
+            msg = (p.stderr or p.stdout or "no transcript").strip().replace("\n", " ")
+            return f"(no transcript: {msg[:80]})"
+        return p.stdout.strip() or "(empty result)"
+
+    def _fetch_terminal(self, pane):
+        herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+        machine = self.cfg.get("herdr_machine", "mbp")
+        p = subprocess.run(
+            [herdr, "--machine", machine, "agent", "read", pane,
+             "--source", "recent", "--lines", "120", "--format", "text"],
+            capture_output=True, text=True, timeout=20,
+        )
+        if p.returncode != 0:
+            msg = (p.stderr or p.stdout or "read failed").strip().replace("\n", " ")
+            return f"(terminal: {msg[:80]})"
+        return p.stdout.strip() or "(empty terminal)"
+
+    def _result_poller(self):
+        while self.running:
+            pane = self._selected_pane()
+            st = self.st
+            if pane and (pane != st.result_pane or time.time() - st.result_at > 5):
+                if pane != st.result_pane:
+                    st.result_pane = None
+                    st.result_text = ""
+                st.result_loading = True
+                try:
+                    if st.result_mode == "terminal":
+                        text = self._fetch_terminal(pane)
+                    else:
+                        text = self._fetch_transcript(pane)
+                except Exception as e:
+                    text = f"(error: {e})"
+                if self._selected_pane() == pane:
+                    st.result_text = text
+                    st.result_pane = pane
+                    st.result_at = time.time()
+                    st.result_loading = False
+            for _ in range(10):
                 if not self.running:
                     return
                 time.sleep(0.1)
@@ -1000,20 +1117,59 @@ class Pager:
             self.running = False
             return
         if k == "esc":
+            if st.quick:
+                st.quick = None
+                st.say("quick reply cancelled")
+                return
             st.card = None
             st.armed = None
             return
         if k in ("up", "down"):
             n = len((st.snap or {}).get("agents", []))
             if not st.card and n:
+                old = st.selected
                 st.selected = max(0, min(n - 1, st.selected + (1 if k == "down" else -1)))
+                if st.selected != old:
+                    st.result_scroll = 0
             return
         if k == "enter":
+            if st.quick:
+                pane = self._selected_pane()
+                text = st.quick
+                st.quick = None
+                if pane and text:
+                    threading.Thread(
+                        target=self._send_prompt_worker, args=(pane, text), daemon=True
+                    ).start()
+                return
             if st.card:
                 return
             agents = (st.snap or {}).get("agents", [])
             if agents:
                 self.show(agents[st.selected]["pane"], -1)
+            return
+        if k == "p":
+            agents = (st.snap or {}).get("agents", [])
+            if agents:
+                st.prompt_text = ""
+                st.prompt_pane = agents[st.selected]["pane"]
+                st.quick = None
+            return
+        if k == "t":
+            st.result_mode = "terminal" if st.result_mode == "transcript" else "transcript"
+            st.result_pane = None
+            st.result_scroll = 0
+            st.result_text = ""
+            st.say("view: " + st.result_mode)
+            return
+        if k in ("[", "]"):
+            st.result_scroll = max(0, st.result_scroll + (1 if k == "]" else -1))
+            return
+        if k in "123456" and len(k) == 1:
+            idx = int(k) - 1
+            if idx < len(QUICK_REPLIES):
+                st.quick = QUICK_REPLIES[idx]
+                st.say(f'send "{st.quick}"? Enter yes / Esc no')
             return
         if k == "r":
             self.send_list()
@@ -1074,6 +1230,7 @@ class Pager:
     def run(self):
         self.enter_screen()
         threading.Thread(target=self._title_poller, daemon=True).start()
+        threading.Thread(target=self._result_poller, daemon=True).start()
         last_draw = 0.0
         try:
             while self.running:
