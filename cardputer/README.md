@@ -45,22 +45,21 @@ prompt, or approve/deny:
 
 ```
                           12:34
-RESULT [transcript] gemini
-最后一条 assistant 文本…
+RESULT [recent] gemini
+最近的终端输出…
 STATUS gemini
 1继续 2可以 3不行 4commit 5retry 6怎样
 i stop  j focus  Esc
 ```
 
-Agents with a Claude session open in transcript mode; agents without one open
-in terminal mode automatically. `t` switches between transcript and terminal;
-`f/x` (or Up/Down) and `[` / `]` scroll the result.
+The result view is herdr's own `agent read`, so it includes terminal output and
+tool activity — intentionally. `t` toggles `recent-unwrapped` (200 lines) and
+`visible` (the current screen); `f/x` (or Up/Down) and `[` / `]` scroll it.
 
 There are no helper files or services on the Mac. The client uses the existing
 SSH connection and standard commands:
 
-- transcript: `find ~/.claude/projects -name <session>.jsonl` then
-  `tail -c 40000`; the last assistant text is parsed on the device
+- result: `herdr agent read <pane> --source recent-unwrapped|visible`
 - mtime sort: the five-second poll runs `herdr agent list` and
   `find … -exec stat -f '%m %N'` in the same SSH command
 
@@ -113,7 +112,7 @@ a name. The title comes from the pane's terminal.
 | key | action |
 |---|---|
 | `f` / `x` (or Up / Down), `[` / `]` | scroll the result |
-| `t` | toggle the result: transcript ↔ terminal |
+| `t` | toggle the result: recent-unwrapped ↔ visible screen |
 | `v` | start recording; press `v` again to stop |
 | `p` | type a prompt (ASCII); Enter sends |
 | `1`–`6` | arm a quick reply (继续 / 可以 / 不行 / commit and push / retry / 怎么样了); Enter sends, Esc cancels |
@@ -165,8 +164,12 @@ cardputer-pager --voice-test --wav x.wav
 ## Current scope
 
 Implemented: status list with terminal titles; a detail screen per agent with
-the last assistant text (transcript or terminal), the permission/question card,
-voice-to-prompt, a typed prompt, quick replies, and approve/deny/interrupt/jump.
+recent terminal output (`recent-unwrapped`) or the visible screen, Claude Code
+question/plan forms, permission cards, voice-to-prompt, a typed prompt, quick
+replies, and approve/deny/interrupt/jump.
 
 The list never sends anything; all message and decision actions live in the
 detail screen. The result is fetched only while a detail screen is open.
+
+A long voice prompt wraps across as many rows as fit; the visible part shows
+the end of the text (where typing continues) with a leading `…` when truncated.

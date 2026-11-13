@@ -230,34 +230,6 @@ def record_wav(path, cfg):
     return path
 
 
-def last_assistant_text(raw):
-    text = ""
-    for line in (raw or "").splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if row.get("type") != "assistant":
-            continue
-        content = (row.get("message") or {}).get("content") or []
-        if not isinstance(content, list):
-            continue
-        parts = [
-            b.get("text", "")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "text"
-        ]
-        joined = "\n".join(p for p in parts if p.strip()).strip()
-        if joined:
-            text = joined
-    if len(text) > 4000:
-        text = text[:4000].rstrip() + "\n…"
-    return text
-
-
 def tidy_transcript(text, cfg=None):
     """Gemini sometimes puts a space between every Chinese character."""
     text = re.sub(r"\s+", " ", text or "").strip()
@@ -552,10 +524,16 @@ def render(st, w, h):
             return out[:h]
         out.append(color(clip(f"RESULT [{st.result_mode}] {sel_title}", w), "cyan"))
 
-        prompt_extra = 1 if st.prompt_text is not None else 0
         card_h = max(1, min(3, (h - 7) // 3)) if st.card else 0
         card_block = (1 + card_h) if st.card else 0
-        result_h = max(1, h - 4 - card_block - prompt_extra)
+        prompt_lines = []
+        prompt_h = 0
+        if st.prompt_text is not None:
+            prompt_lines = wrap_text(st.prompt_text, max(1, w - 2)) or [""]
+            prompt_h = min(len(prompt_lines), max(1, h - 4 - card_block))
+            result_h = max(1, h - 3 - card_block - prompt_h)
+        else:
+            result_h = max(1, h - 4 - card_block)
 
         if st.result_pane != pane:
             result = "loading…" if st.result_loading else "(loading…)"
@@ -603,9 +581,16 @@ def render(st, w, h):
             card_hint = "  ".join(hints)
 
         if st.prompt_text is not None:
-            out.append(line([("> " + st.prompt_text, "rev")], w))
-        quick_bar = " ".join(f"{i + 1}{x}" for i, x in enumerate(QUICK_SHORT))
-        out.append(color(clip(quick_bar, w), "grey"))
+            start = max(0, len(prompt_lines) - prompt_h)
+            for j, ln in enumerate(prompt_lines[start:start + prompt_h]):
+                if start == 0:
+                    prefix = "> " if j == 0 else "  "
+                else:
+                    prefix = "… " if j == 0 else "  "
+                out.append(line([(prefix + ln, "rev")], w))
+        else:
+            quick_bar = " ".join(f"{i + 1}{x}" for i, x in enumerate(QUICK_SHORT))
+            out.append(color(clip(quick_bar, w), "grey"))
     else:
         body_h = h - 2
         if st.link == "connecting":
@@ -680,7 +665,7 @@ class State:
         self.detail_pane = None
         self.result_text = ""
         self.result_pane = None
-        self.result_mode = "transcript"
+        self.result_mode = "recent"
         self.result_at = 0.0
         self.result_scroll = 0
         self.result_loading = False
@@ -857,37 +842,42 @@ class Pager:
         t = mt if mt else self.st.state_times.get(pane, 0)
         return (STATUS_RANK.get(a.get("st"), 4), -t)
 
-    def _fetch_transcript(self, pane):
-        info = self.st.sessions.get(pane) or {}
-        session = info.get("session")
-        if not session:
-            return "(no Claude session; press t for terminal)"
-        remote = (
-            f"f=$(find \"$HOME/.claude/projects\" -name {shlex.quote(session)}.jsonl "
-            f"-print | head -1); [ -n \"$f\" ] && tail -c 40000 \"$f\""
-        )
-        cmd = [
-            "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-            self.cfg["host"], remote,
-        ]
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-        if p.returncode != 0:
-            msg = (p.stderr or p.stdout or "no transcript").strip().replace("\n", " ")
-            return f"(no transcript: {msg[:80]})"
-        return last_assistant_text(p.stdout) or "(no assistant text)"
-
     def _fetch_terminal(self, pane):
         herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
         machine = self.cfg.get("herdr_machine", "mbp")
+        status = "unknown"
+        for a in (self.st.snap or {}).get("agents", []):
+            if a.get("pane") == pane:
+                status = a.get("st", "unknown")
+                break
+        recent = self.st.result_mode == "recent"
+        note = ""
+        source = "recent-unwrapped"
+        lines = "200"
+        if recent and status in ("idle", "done", "unknown"):
+            pass
+        else:
+            source = "visible"
+            lines = "40"
+            if recent:
+                note = "(working — showing the visible screen)\n"
         p = subprocess.run(
             [herdr, "--machine", machine, "agent", "read", pane,
-             "--source", "visible", "--lines", "40", "--format", "text"],
+             "--source", source, "--lines", lines, "--format", "text"],
             capture_output=True, text=True, timeout=20,
         )
+        if p.returncode != 0 and source == "recent-unwrapped":
+            source, lines = "visible", "40"
+            note = "(recent unavailable — showing the visible screen)\n"
+            p = subprocess.run(
+                [herdr, "--machine", machine, "agent", "read", pane,
+                 "--source", source, "--lines", lines, "--format", "text"],
+                capture_output=True, text=True, timeout=20,
+            )
         if p.returncode != 0:
             msg = (p.stderr or p.stdout or "read failed").strip().replace("\n", " ")
             return f"(terminal: {msg[:80]})"
-        return p.stdout.strip() or "(empty terminal)"
+        return note + (p.stdout.strip() or "(empty terminal)")
 
     def open_detail(self, pane):
         st = self.st
@@ -906,8 +896,7 @@ class Pager:
         st.form_options = []
         st.form_selected = 0
         st.form_pane = None
-        info = st.sessions.get(pane) or {}
-        st.result_mode = "transcript" if info.get("session") else "terminal"
+        st.result_mode = "recent"
         self.show(pane, -1)
 
     def close_detail(self):
@@ -930,21 +919,13 @@ class Pager:
         while self.running:
             pane = self.st.detail_pane
             st = self.st
-            info = st.sessions.get(pane) if pane else None
-            if pane and info is not None and not info.get("session") and st.result_mode == "transcript":
-                st.result_mode = "terminal"
-                st.result_pane = None
-                st.result_text = ""
             if pane and (pane != st.result_pane or time.time() - st.result_at > 5):
                 if pane != st.result_pane:
                     st.result_pane = None
                     st.result_text = ""
                 st.result_loading = True
                 try:
-                    if st.result_mode == "terminal":
-                        text = self._fetch_terminal(pane)
-                    else:
-                        text = self._fetch_transcript(pane)
+                    text = self._fetch_terminal(pane)
                 except Exception as e:
                     text = f"(error: {e})"
                 if self._selected_pane() == pane:
@@ -1116,9 +1097,16 @@ class Pager:
                 if raw.strip():
                     self.on_line(raw.decode("utf-8", "replace"))
         if sys.stdin.fileno() in r:
-            key = read_key(sys.stdin.fileno())
-            if key:
+            while True:
+                key = read_key(sys.stdin.fileno())
+                if not key:
+                    break
                 self.on_key(key)
+                if not self.running:
+                    break
+                r2, _, _ = select.select([sys.stdin.fileno()], [], [], 0)
+                if not r2:
+                    break
 
     def on_line(self, line_text):
         if len(line_text) > MAX_LINE:
@@ -1462,7 +1450,7 @@ class Pager:
             if not st.detail_pane:
                 st.say("open an agent first (Enter)")
                 return
-            st.result_mode = "terminal" if st.result_mode == "transcript" else "transcript"
+            st.result_mode = "visible" if st.result_mode == "recent" else "recent"
             st.result_pane = None
             st.result_scroll = 0
             st.result_text = ""
