@@ -31,6 +31,7 @@ import base64
 import errno
 import json
 import os
+import queue
 import re
 import select
 import shlex
@@ -675,6 +676,8 @@ class State:
         self.form_selected = 0
         self.form_pane = None
         self.form_at = 0.0
+        self.form_key_at = 0.0
+        self.form_miss = 0
         self.quick = None
         self.prompt_text = None
         self.prompt_pane = None
@@ -751,6 +754,7 @@ class Pager:
         self.voice = load_voice_config()
         self.voice_proc = None
         self.voice_cancel = False
+        self.key_q = queue.Queue()
 
     # -- ssh link --
 
@@ -853,26 +857,28 @@ class Pager:
                 break
         recent = self.st.result_mode == "recent"
         note = ""
-        source = "recent-unwrapped"
-        lines = "200"
-        if recent and status in ("idle", "done", "unknown"):
-            pass
+        if recent:
+            if status in ("idle", "done", "unknown"):
+                subcmd = ["agent", "read", pane]
+            else:
+                subcmd = ["pane", "read", pane]
+                note = "(working — showing the pane's recent output)\n"
+            source, lines = "recent-unwrapped", "200"
         else:
-            source = "visible"
-            lines = "40"
-            if recent:
-                note = "(working — showing the visible screen)\n"
+            subcmd = ["pane", "read", pane]
+            source, lines = "visible", "40"
         p = subprocess.run(
-            [herdr, "--machine", machine, "agent", "read", pane,
-             "--source", source, "--lines", lines, "--format", "text"],
+            [herdr, "--machine", machine] + subcmd +
+            ["--source", source, "--lines", lines, "--format", "text"],
             capture_output=True, text=True, timeout=20,
         )
         if p.returncode != 0 and source == "recent-unwrapped":
+            subcmd = ["pane", "read", pane]
             source, lines = "visible", "40"
             note = "(recent unavailable — showing the visible screen)\n"
             p = subprocess.run(
-                [herdr, "--machine", machine, "agent", "read", pane,
-                 "--source", source, "--lines", lines, "--format", "text"],
+                [herdr, "--machine", machine] + subcmd +
+                ["--source", source, "--lines", lines, "--format", "text"],
                 capture_output=True, text=True, timeout=20,
             )
         if p.returncode != 0:
@@ -897,6 +903,8 @@ class Pager:
         st.form_options = []
         st.form_selected = 0
         st.form_pane = None
+        st.form_key_at = 0
+        st.form_miss = 0
         st.result_mode = "recent"
         self.show(pane, -1)
 
@@ -915,6 +923,8 @@ class Pager:
         st.form_options = []
         st.form_selected = 0
         st.form_pane = None
+        st.form_key_at = 0
+        st.form_miss = 0
 
     def _result_poller(self):
         while self.running:
@@ -939,25 +949,31 @@ class Pager:
                     return
                 time.sleep(0.1)
 
-    def _send_keys_worker(self, pane, key):
+    def _key_worker(self):
         herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
         machine = self.cfg.get("herdr_machine", "mbp")
-        try:
-            p = subprocess.run(
-                [herdr, "--machine", machine, "agent", "send-keys", pane, key],
-                capture_output=True, text=True, timeout=15,
-            )
-            if p.returncode != 0:
-                msg = (p.stdout or p.stderr or "").strip().replace("\n", " ")
-                self.st.say(f"key {key}: {msg[:70]}")
-        except Exception as e:
-            self.st.say(f"key {key}: {e}")
+        while self.running:
+            try:
+                pane, key = self.key_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                p = subprocess.run(
+                    [herdr, "--machine", machine, "agent", "send-keys", pane, key],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if p.returncode != 0:
+                    msg = (p.stdout or p.stderr or "").strip().replace("\n", " ")
+                    self.st.say(f"key {key}: {msg[:70]}")
+            except Exception as e:
+                self.st.say(f"key {key}: {e}")
 
     def _form_key(self, key):
         st = self.st
         pane = st.form_pane or st.detail_pane
         if not pane:
             return
+        st.form_key_at = time.time()
         if key == "up":
             st.form_selected = max(0, st.form_selected - 1)
         elif key == "down":
@@ -966,9 +982,7 @@ class Pager:
             st.form_options = []
             st.form_title = ""
             st.form_pane = None
-        threading.Thread(
-            target=self._send_keys_worker, args=(pane, key), daemon=True
-        ).start()
+        self.key_q.put((pane, key))
 
     def _form_poller(self):
         herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
@@ -990,11 +1004,16 @@ class Pager:
                             st.form_pane = pane
                             st.form_title = title or ((st.card or {}).get("summary") or "")
                             st.form_options = opts
-                            st.form_selected = sel
+                            if time.time() - st.form_key_at > 1.2:
+                                st.form_selected = sel
                             st.form_at = time.time()
+                            st.form_miss = 0
                         else:
-                            st.form_pane = None
-                            st.form_options = []
+                            st.form_miss += 1
+                            if st.form_miss >= 3:
+                                st.form_pane = None
+                                st.form_options = []
+                                st.form_title = ""
                 except Exception:
                     pass
             elif st.form_pane:
@@ -1533,6 +1552,7 @@ class Pager:
         threading.Thread(target=self._title_poller, daemon=True).start()
         threading.Thread(target=self._result_poller, daemon=True).start()
         threading.Thread(target=self._form_poller, daemon=True).start()
+        threading.Thread(target=self._key_worker, daemon=True).start()
         last_draw = 0.0
         try:
             while self.running:

@@ -52,14 +52,17 @@ STATUS gemini
 i stop  j focus  Esc
 ```
 
-The result view is herdr's own `agent read`, so it includes terminal output and
-tool activity — intentionally. `t` toggles `recent-unwrapped` (200 lines) and
-`visible` (the current screen); `f/x` (or Up/Down) and `[` / `]` scroll it.
+The result view is herdr's own terminal read: `agent read
+--source recent-unwrapped` for idle/done agents, and `pane read` for working
+agents (an alternate-screen app may expose little scrollback while it runs).
+`t` toggles recent-unwrapped / visible; `f/x` scrolls five lines, `[` / `]`
+one. When there is more text, the title shows the position:
+`RESULT [recent 6/42]`.
 
 There are no helper files or services on the Mac. The client uses the existing
 SSH connection and standard commands:
 
-- result: `herdr agent read <pane> --source recent-unwrapped|visible`
+- result: `herdr agent read` (idle/done) or `herdr pane read` (working)
 - mtime sort: the five-second poll runs `herdr agent list` and
   `find … -exec stat -f '%m %N'` in the same SSH command
 
@@ -85,6 +88,10 @@ Permission prompts are still the pager's own `a approve` / `d deny` card, not
 this form view. A free-text option such as "Type something." opens an input in
 Claude Code; the pager only selects listed options, so use the terminal for
 free text.
+
+Each `f`/`x` sends exactly one `up`/`down` through a single serialized queue,
+and the one-second detection poll does not overwrite your selection for 1.2 s
+after a key, so the highlight no longer jumps back and forth.
 
 | glyph | meaning |
 |---|---|
