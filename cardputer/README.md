@@ -66,6 +66,27 @@ SSH connection and standard commands:
 
 The only Mac-side binary remains the existing `pager-bridge`.
 
+### Claude Code forms
+
+When Claude Code shows a question or plan-approval form (the `❯ 1. …` menu),
+the detail screen switches to a form view. The options and the current
+selection come from herdr's `agent read --source detection`; choices are sent
+with `herdr agent send-keys`:
+
+```
+FORM  Which colour?
+❯ 1. Red  Choose red
+  2. Blue  Choose blue
+  3. Type something.
+  4. Chat about this
+f/x move  Enter select  Esc back
+```
+
+Permission prompts are still the pager's own `a approve` / `d deny` card, not
+this form view. A free-text option such as "Type something." opens an input in
+Claude Code; the pager only selects listed options, so use the terminal for
+free text.
+
 | glyph | meaning |
 |---|---|
 | `×` | blocked: needs your approval |
@@ -102,6 +123,14 @@ a name. The title comes from the pane's terminal.
 | `j` | focus the agent's pane in herdr on the Mac |
 | `r` | refresh the snapshot and the card |
 | Esc | close the detail / cancel a quick reply or prompt |
+
+**Claude Code form** (question / plan approval)
+
+| key | action |
+|---|---|
+| `f` / `x` (or Up / Down) | move the selection; sends `up` / `down` to the agent |
+| Enter | select the current option; sends `enter` |
+| Esc | leave the form view without cancelling the agent's form |
 
 ## Voice
 

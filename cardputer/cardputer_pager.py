@@ -67,6 +67,57 @@ HOTWORD_MAP = {
     "code x": "Codex",
     "herdr pager": "herdr-pager",
 }
+
+MENU_RE = re.compile(r"^\s*([>❯])?\s*(\d+)[.)]\s+(.*)$")
+HINT_RE = re.compile(
+    r"(?i)enter to select|↑/↓|esc to cancel|shift\+tab|ctrl\+g|to navigate|to amend"
+)
+
+
+def parse_form(text):
+    """Extract the last numbered menu from herdr's detection snapshot."""
+    lines = (text or "").splitlines()
+    groups = []
+    cur = []
+    for i, raw in enumerate(lines):
+        m = MENU_RE.match(raw)
+        if m:
+            cur.append({
+                "idx": i,
+                "marker": bool(m.group(1)),
+                "n": int(m.group(2)),
+                "label": m.group(3).strip(),
+                "desc": [],
+            })
+        elif raw.strip().startswith(("─", "╌")):
+            continue
+        elif cur and raw.strip() and not HINT_RE.search(raw):
+            if raw.startswith((" ", "\t")):
+                cur[-1]["desc"].append(raw.strip())
+            else:
+                groups.append(cur)
+                cur = []
+        elif cur:
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    for g in reversed(groups):
+        if len(g) >= 2:
+            selected = next((k for k, o in enumerate(g) if o["marker"]), 0)
+            title = ""
+            for j in range(g[0]["idx"] - 1, max(-1, g[0]["idx"] - 8), -1):
+                t = lines[j].strip()
+                if t and not t.startswith(("─", "╌")) and not MENU_RE.match(lines[j]):
+                    title = t
+                    break
+            options = [{
+                "n": o["n"],
+                "label": o["label"],
+                "desc": " ".join(o["desc"]),
+            } for o in g]
+            return options, title, selected
+    return [], "", 0
 STATUS_COLOR = {
     "blocked": "red",
     "done": "cyan",
@@ -483,6 +534,22 @@ def render(st, w, h):
     if st.detail_pane:
         pane = st.detail_pane
         sel_title = st.titles.get(pane) or st.agent_name(pane) or pane
+        if st.form_options and st.form_pane == pane:
+            title = st.form_title or ((st.card or {}).get("summary") or "")
+            out.append(color(clip("FORM  " + title, w), "cyan"))
+            form_h = max(1, h - 3)
+            for i, o in enumerate(st.form_options[:form_h]):
+                marker = "❯" if i == st.form_selected else " "
+                text = f"{marker} {o['n']}. {o['label']}"
+                if o.get("desc"):
+                    text += "  " + o["desc"]
+                out.append(line([(text, "rev" if i == st.form_selected else "white")], w))
+            hint = "f/x move  Enter select  Esc back"
+            out = out[:h - 1]
+            while len(out) < h - 1:
+                out.append("")
+            out.append(color(pad(hint, w), "grey"))
+            return out[:h]
         out.append(color(clip(f"RESULT [{st.result_mode}] {sel_title}", w), "cyan"))
 
         prompt_extra = 1 if st.prompt_text is not None else 0
@@ -617,6 +684,11 @@ class State:
         self.result_at = 0.0
         self.result_scroll = 0
         self.result_loading = False
+        self.form_title = ""
+        self.form_options = []
+        self.form_selected = 0
+        self.form_pane = None
+        self.form_at = 0.0
         self.quick = None
         self.prompt_text = None
         self.prompt_pane = None
@@ -830,6 +902,10 @@ class Pager:
         st.result_at = 0
         st.result_loading = True
         st.voice_msg = ""
+        st.form_title = ""
+        st.form_options = []
+        st.form_selected = 0
+        st.form_pane = None
         info = st.sessions.get(pane) or {}
         st.result_mode = "transcript" if info.get("session") else "terminal"
         self.show(pane, -1)
@@ -845,6 +921,10 @@ class Pager:
         st.result_text = ""
         st.result_loading = False
         st.voice_msg = ""
+        st.form_title = ""
+        st.form_options = []
+        st.form_selected = 0
+        st.form_pane = None
 
     def _result_poller(self):
         while self.running:
@@ -872,6 +952,73 @@ class Pager:
                     st.result_pane = pane
                     st.result_at = time.time()
                     st.result_loading = False
+            for _ in range(10):
+                if not self.running:
+                    return
+                time.sleep(0.1)
+
+    def _send_keys_worker(self, pane, key):
+        herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+        machine = self.cfg.get("herdr_machine", "mbp")
+        try:
+            p = subprocess.run(
+                [herdr, "--machine", machine, "agent", "send-keys", pane, key],
+                capture_output=True, text=True, timeout=15,
+            )
+            if p.returncode != 0:
+                msg = (p.stdout or p.stderr or "").strip().replace("\n", " ")
+                self.st.say(f"key {key}: {msg[:70]}")
+        except Exception as e:
+            self.st.say(f"key {key}: {e}")
+
+    def _form_key(self, key):
+        st = self.st
+        pane = st.form_pane or st.detail_pane
+        if not pane:
+            return
+        if key == "up":
+            st.form_selected = max(0, st.form_selected - 1)
+        elif key == "down":
+            st.form_selected = min(max(0, len(st.form_options) - 1), st.form_selected + 1)
+        elif key == "enter":
+            st.form_options = []
+            st.form_title = ""
+            st.form_pane = None
+        threading.Thread(
+            target=self._send_keys_worker, args=(pane, key), daemon=True
+        ).start()
+
+    def _form_poller(self):
+        herdr = shutil.which("herdr") or os.path.expanduser("~/.local/bin/herdr")
+        machine = self.cfg.get("herdr_machine", "mbp")
+        while self.running:
+            st = self.st
+            pane = st.detail_pane
+            kind = (st.card or {}).get("kind") if st.card else ""
+            if pane and kind == "question":
+                try:
+                    p = subprocess.run(
+                        [herdr, "--machine", machine, "agent", "read", pane,
+                         "--source", "detection", "--format", "text"],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if p.returncode == 0:
+                        opts, title, sel = parse_form(p.stdout)
+                        if opts:
+                            st.form_pane = pane
+                            st.form_title = title or ((st.card or {}).get("summary") or "")
+                            st.form_options = opts
+                            st.form_selected = sel
+                            st.form_at = time.time()
+                        else:
+                            st.form_pane = None
+                            st.form_options = []
+                except Exception:
+                    pass
+            elif st.form_pane:
+                st.form_pane = None
+                st.form_options = []
+                st.form_title = ""
             for _ in range(10):
                 if not self.running:
                     return
@@ -1241,6 +1388,24 @@ class Pager:
             if key == "ESC":
                 st.say("transcribing — wait")
                 return
+        if st.form_options and st.detail_pane:
+            fk = key.lower()
+            if fk == "q":
+                self.running = False
+                return
+            if fk in ("f", "up"):
+                self._form_key("up")
+                return
+            if fk in ("x", "down"):
+                self._form_key("down")
+                return
+            if key == "ENTER":
+                self._form_key("enter")
+                return
+            if key == "ESC":
+                self.close_detail()
+                return
+            return
 
         k = key.lower()
         if k == "f":
@@ -1378,6 +1543,7 @@ class Pager:
         self.enter_screen()
         threading.Thread(target=self._title_poller, daemon=True).start()
         threading.Thread(target=self._result_poller, daemon=True).start()
+        threading.Thread(target=self._form_poller, daemon=True).start()
         last_draw = 0.0
         try:
             while self.running:
