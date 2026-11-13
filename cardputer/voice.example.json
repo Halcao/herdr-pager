@@ -1,0 +1,31 @@
+{
+  "enabled": false,
+  "mode": "chat-audio",
+  "base_url": "https://cnapi.kksj.org/v1",
+  "api_key": "",
+  "model": "gemini-3.1-flash-lite",
+  "language": "zh",
+  "record_seconds": 6,
+  "record_mode": "toggle",
+  "max_record_seconds": 15,
+  "audio_format": "mp3",
+  "record_device": "plughw:CARD=ES8389Audio,DEV=0",
+  "command": "",
+  "prompt": "",
+  "prompt_mode": "chat",
+  "hotwords": ["Claude Code", "Codex", "Qwen", "herdr", "tailscale", "CardputerZero", "mbp", "Gemini", "Ovis", "rebase", "commit", "push", "main"],
+  "proxy": "",
+  "_notes": [
+    "mode=openai: POST <base_url>/audio/transcriptions (OpenTypeless / OpenAI-compatible transcription).",
+    "mode=chat-audio: POST <base_url>/chat/completions with base64 input_audio (Gemini via OpenAI-compatible gateways).",
+    "mode=command: run this shell command; {wav} is replaced by the recording path, else the path is appended.",
+    "Tested on cnapi.kksj.org: gemini-3.1-flash-lite ($0.000092/req), gemini-3.5-flash-lite ($0.000128/req), gemini-3-flash-preview ($0.000184/req).",
+    "GPT/whisper ASR models exist there but currently return HTTP 429 upstream_rate_limit.",
+    "proxy: optional, e.g. http://100.64.0.30:7890 (the Mac's Clash) if capu can't reach the API directly.",
+    "audio_format=mp3 converts the recording with ffmpeg (43KB instead of 221KB for 6s); wav keeps the raw file.",
+    "max_record_seconds caps a toggle recording; the client retries transient curl failures twice.",
+    "prompt empty = built-in chat/terminal prompt (filler removal, hotwords, numbers, self-corrections).",
+    "prompt_mode: chat (message to a coding agent) or terminal (shell command, no trailing period).",
+    "Set enabled=true after filling the fields; test with: cardputer-pager --voice-test --wav file.wav"
+  ]
+}

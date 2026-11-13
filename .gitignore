@@ -21,3 +21,6 @@ bridge/emutest/out/
 
 # Python bytecode (tools/media).
 __pycache__/
+
+# Local release downloads (the bridge binary, SHA256SUMS).
+/dist/
