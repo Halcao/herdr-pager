@@ -522,7 +522,6 @@ def render(st, w, h):
                 out.append("")
             out.append(color(pad(hint, w), "grey"))
             return out[:h]
-        out.append(color(clip(f"RESULT [{st.result_mode}] {sel_title}", w), "cyan"))
 
         card_h = max(1, min(3, (h - 7) // 3)) if st.card else 0
         card_block = (1 + card_h) if st.card else 0
@@ -542,6 +541,8 @@ def render(st, w, h):
         lines = wrap_text(result, w)
         max_scroll = max(0, len(lines) - result_h)
         st.result_scroll = max(0, min(st.result_scroll, max_scroll))
+        pos = f" {st.result_scroll + 1}/{max_scroll + 1}" if max_scroll else ""
+        out.append(color(clip(f"RESULT [{st.result_mode}{pos}] {sel_title}", w), "cyan"))
         for ln in lines[st.result_scroll:st.result_scroll + result_h]:
             out.append(line([(ln, "white")], w))
 
@@ -625,7 +626,7 @@ def render(st, w, h):
         hint = f'Enter send "{st.quick}"   Esc cancel'
     elif st.detail_pane:
         if card_hint:
-            hint = card_hint + "  Esc"
+            hint = "f/x scroll  " + card_hint + "  Esc"
         else:
             hint = "f/x scroll  t view  v/p 1-6  Esc back"
     else:
@@ -1416,7 +1417,7 @@ class Pager:
             return
         if k in ("up", "down"):
             if st.detail_pane:
-                st.result_scroll = max(0, st.result_scroll + (1 if k == "down" else -1))
+                st.result_scroll = max(0, st.result_scroll + (5 if k == "down" else -5))
                 return
             n = len((st.snap or {}).get("agents", []))
             if n:
