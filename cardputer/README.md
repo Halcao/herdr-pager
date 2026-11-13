@@ -22,12 +22,14 @@ so there is no bridge SSH server, no USB pairing and no port 2277.
 
 ## Screen
 
-The top band is empty in the normal case (only the clock). `LINK`, `OFF`,
-`HERDR OFFLINE`, `REC` and `STT` appear only when they matter.
+The top band shows the target and screen (`herdr@mbp · agents` or
+`· detail`) plus the clock. `LINK`, `OFF`, `HERDR OFFLINE`, `REC` and
+`transcribing` replace it only when they matter.
 
 The list is navigation only. It is sorted **blocked > done > working > idle**;
-within a group the most recently active agent comes first. The title is the
-pane's terminal title, full width; the old trailing folder column is gone.
+within a group the most recently active agent comes first (transcript mtime,
+falling back to the observed state-change time). The title is the pane's
+terminal title, full width; the old trailing folder column is gone.
 
 ```
                           12:34
@@ -53,11 +55,18 @@ Agents with a Claude session open in transcript mode; agents without one open
 in terminal mode automatically. `t` switches between transcript and terminal;
 `f/x` (or Up/Down) and `[` / `]` scroll the result. The transcript view is read
 from Claude Code's session JSONL on the Mac by
-[`herdr_final.py`](herdr_final.py), which must be installed there:
+[`herdr_final.py`](herdr_final.py), and the list's mtime sort uses
+[`herdr_agents.py`](herdr_agents.py). Both run on the Mac; installing them is
+one command each:
 
 ```sh
 install -m 755 cardputer/herdr_final.py ~/.local/bin/herdr-final
+install -m 755 cardputer/herdr_agents.py ~/.local/bin/herdr-agents
 ```
+
+`herdr-agents` is polled once per five seconds in place of the previous
+`herdr --machine … agent list`, so it adds no extra request. If it is missing,
+the client falls back to the state-change time.
 
 | glyph | meaning |
 |---|---|
@@ -91,8 +100,8 @@ a name. The title comes from the pane's terminal.
 | `1`–`6` | arm a quick reply (继续 / 可以 / 不行 / commit and push / retry / 怎么样了); Enter sends, Esc cancels |
 | `a` | approve (press twice), when the card offers it |
 | `d` | deny |
-| `i` | interrupt (press twice) |
-| `j` | jump to the pane in herdr |
+| `i` | stop the current turn (interrupt the agent; press twice) |
+| `j` | focus the agent's pane in herdr on the Mac |
 | `r` | refresh the snapshot and the card |
 | Esc | close the detail / cancel a quick reply or prompt |
 
@@ -105,6 +114,10 @@ each dictation costs about $0.0001. The recording is converted to MP3 with
 Chinese characters. Transient network resets are retried once, with a 45 s cap.
 The built-in prompt follows OpenTypeless' correction rules (fillers, hotwords,
 numbers, self-corrections, spacing); see [`voice.md`](voice.md).
+
+After transcription the text stays in the prompt line: Enter sends it to the
+selected agent, Esc cancels it. Pressing Esc while `transcribing` does not
+close the detail; the prompt is kept.
 
 The microphone is the ES8389 card:
 

@@ -446,6 +446,8 @@ def render(st, w, h):
         left.append(("LINK", "yellow"))
     elif st.link != "connected":
         left.append(("OFF", "red"))
+    else:
+        left.append((f"herdr@{st.host} · {'detail' if st.detail_pane else 'agents'}", "grey"))
     if herdr_off:
         left.append((" HERDR OFFLINE", "red"))
     if st.msg:
@@ -507,9 +509,9 @@ def render(st, w, h):
             if "deny" in can:
                 hints.append("d deny")
             if "interrupt" in can:
-                hints.append("i" + (" INT?" if st.armed == "interrupt" else " int"))
+                hints.append("i" + (" STOP?" if st.armed == "interrupt" else " stop"))
             if "jump" in can:
-                hints.append("j jump")
+                hints.append("j focus")
             card_hint = "  ".join(hints)
 
         if st.prompt_text is not None:
@@ -677,12 +679,23 @@ class Pager:
         while self.running:
             try:
                 p = subprocess.run(
-                    [herdr, "--machine", machine, "agent", "list"],
-                    capture_output=True, text=True, timeout=15,
+                    ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                     self.cfg["host"], "~/.local/bin/herdr-agents"],
+                    capture_output=True, text=True, timeout=20,
                 )
+                agents = []
                 if p.returncode == 0 and p.stdout.strip():
                     d = json.loads(p.stdout)
-                    agents = d.get("result", {}).get("agents", [])
+                    agents = d.get("agents", [])
+                else:
+                    p = subprocess.run(
+                        [herdr, "--machine", machine, "agent", "list"],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    if p.returncode == 0 and p.stdout.strip():
+                        d = json.loads(p.stdout)
+                        agents = d.get("result", {}).get("agents", [])
+                if agents:
                     titles = {}
                     sessions = {}
                     for a in agents:
@@ -698,9 +711,19 @@ class Pager:
                                 "session": sess_obj.get("value") if isinstance(sess_obj, dict) else None,
                                 "agent": a.get("agent") or "",
                                 "cwd": a.get("cwd") or "",
+                                "mtime": a.get("mtime") or 0,
                             }
                     self.st.titles = titles
                     self.st.sessions = sessions
+                    if self.st.snap and self.st.snap.get("agents"):
+                        selected_pane = self._selected_pane()
+                        self.st.snap["agents"] = sorted(
+                            self.st.snap["agents"], key=self._sort_key)
+                        if selected_pane:
+                            for i, a in enumerate(self.st.snap["agents"]):
+                                if a.get("pane") == selected_pane:
+                                    self.st.selected = i
+                                    break
             except Exception:
                 pass
             for _ in range(50):
@@ -713,6 +736,12 @@ class Pager:
         if agents and 0 <= self.st.selected < len(agents):
             return agents[self.st.selected].get("pane")
         return None
+
+    def _sort_key(self, a):
+        pane = a.get("pane")
+        mt = (self.st.sessions.get(pane) or {}).get("mtime") or 0
+        t = mt if mt else self.st.state_times.get(pane, 0)
+        return (STATUS_RANK.get(a.get("st"), 4), -t)
 
     def _fetch_transcript(self, pane):
         info = self.st.sessions.get(pane) or {}
@@ -755,6 +784,7 @@ class Pager:
         st.result_scroll = 0
         st.result_at = 0
         st.result_loading = True
+        st.voice_msg = ""
         info = st.sessions.get(pane) or {}
         st.result_mode = "transcript" if info.get("session") else "terminal"
         self.show(pane, -1)
@@ -769,6 +799,7 @@ class Pager:
         st.result_pane = None
         st.result_text = ""
         st.result_loading = False
+        st.voice_msg = ""
 
     def _result_poller(self):
         while self.running:
@@ -916,13 +947,8 @@ class Pager:
             agents = m.get("agents", [])
             now = time.time()
             self.st.update_times(agents, now)
-            agents = sorted(
-                agents,
-                key=lambda a: (
-                    STATUS_RANK.get(a.get("st"), 4),
-                    -self.st.state_times.get(a.get("pane"), 0),
-                ),
-            )
+
+            agents = sorted(agents, key=self._sort_key)
             m["agents"] = agents
             self.st.snap = m
             self.st.now = m.get("now", self.st.now)
@@ -1086,13 +1112,16 @@ class Pager:
             if not os.path.exists(wav) or os.path.getsize(wav) < 1000:
                 raise RuntimeError("no audio recorded")
             self.st.voice_state = "transcribing"
-            self.st.voice_msg = "STT..."
+            self.st.voice_msg = "transcribing…"
             text = transcribe_wav(wav, self.voice)
             if not text:
                 raise RuntimeError("empty transcript")
+            if self.st.detail_pane != pane:
+                self.st.detail_pane = pane
+                self.st.result_pane = None
             self.st.prompt_text = text
             self.st.prompt_pane = pane
-            self.st.voice_msg = "voice: Enter to send"
+            self.st.voice_msg = ""
         except Exception as e:
             self.st.voice_msg = f"voice: {e}"
         finally:
@@ -1107,10 +1136,12 @@ class Pager:
         st = self.st
         text = (st.prompt_text or "").strip()
         pane = st.prompt_pane
+        if not text or not pane:
+            st.say("no target agent — reopen detail")
+            return
         st.prompt_text = None
         st.prompt_pane = None
-        if not text or not pane:
-            return
+        st.voice_msg = ""
         threading.Thread(target=self._send_prompt_worker, args=(pane, text), daemon=True).start()
 
     def _send_prompt_worker(self, pane, text):
@@ -1122,11 +1153,14 @@ class Pager:
                 capture_output=True, text=True, timeout=40,
             )
             if p.returncode == 0:
+                self.st.voice_msg = ""
                 self.st.say(f"sent to {pane}")
             else:
+                self.st.voice_msg = ""
                 msg = (p.stdout or p.stderr or "").strip().replace("\n", " ")
                 self.st.say(f"send failed: {msg[:80]}")
         except Exception as e:
+            self.st.voice_msg = ""
             self.st.say(f"send: {e}")
 
     def on_key(self, key):
@@ -1145,6 +1179,7 @@ class Pager:
             if key == "ESC":
                 st.prompt_text = None
                 st.prompt_pane = None
+                st.voice_msg = ""
                 st.say("prompt cancelled")
             elif key == "ENTER":
                 self.send_prompt()
@@ -1153,6 +1188,10 @@ class Pager:
             elif len(key) == 1 and key.isprintable():
                 st.prompt_text += key
             return
+        if st.voice_state == "transcribing":
+            if key == "ESC":
+                st.say("transcribing — wait")
+                return
 
         k = key.lower()
         if k == "f":
@@ -1262,7 +1301,7 @@ class Pager:
                 if c and "interrupt" in (c.get("can") or []):
                     st.armed = "interrupt"
                     st.armed_at = time.time()
-                    st.say("press i again to INTERRUPT")
+                    st.say("press i again to STOP")
                 else:
                     st.say("nothing to interrupt")
             return
