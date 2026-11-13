@@ -485,55 +485,50 @@ def render(st, w, h):
     agents = snap.get("agents", [])
     herdr_off = snap.get("herdr") == "offline"
 
-    # status band: only abnormal/transient states, no permanent OK
-    left = []
-    if st.link == "connecting":
-        left.append(("LINK", "yellow"))
-    elif st.link != "connected":
-        left.append(("OFF", "red"))
-    else:
-        left.append((f"herdr@{st.host} · {'detail' if st.detail_pane else 'agents'}", "grey"))
-    if herdr_off:
-        left.append((" HERDR OFFLINE", "red"))
-    if st.msg:
-        left.append((" " + st.msg, "yellow"))
-    if st.voice_state != "idle" or st.voice_msg:
-        left.append((" " + st.voice_msg, "cyan"))
-    clock = time.strftime("%H:%M", time.localtime(st.now or time.time()))
-    band = line(left, w - 6) + color(pad(clock, 5), "grey") + " "
+    def transient():
+        if st.voice_state == "recording":
+            return "REC — v stop   Esc cancel"
+        if st.voice_state == "transcribing":
+            return "transcribing…"
+        if st.quick:
+            return f'Enter send "{st.quick}"   Esc cancel'
+        if st.msg and time.time() - st.msg_at < 4:
+            return st.msg
+        return ""
 
-    out = [band]
+    tr = transient()
+    out = []
 
     if st.detail_pane:
         pane = st.detail_pane
         sel_title = st.titles.get(pane) or st.agent_name(pane) or pane
+
         if st.form_options and st.form_pane == pane:
             title = st.form_title or ((st.card or {}).get("summary") or "")
             out.append(color(clip("FORM  " + title, w), "cyan"))
-            form_h = max(1, h - 3)
-            for i, o in enumerate(st.form_options[:form_h]):
+            for i, o in enumerate(st.form_options[:h - 1]):
                 marker = "❯" if i == st.form_selected else " "
                 text = f"{marker} {o['n']}. {o['label']}"
                 if o.get("desc"):
                     text += "  " + o["desc"]
                 out.append(line([(text, "rev" if i == st.form_selected else "white")], w))
-            hint = "f/x move  Enter select  Esc back"
-            out = out[:h - 1]
-            while len(out) < h - 1:
+            while len(out) < h:
                 out.append("")
-            out.append(color(pad(hint, w), "grey"))
             return out[:h]
 
-        card_h = max(1, min(3, (h - 7) // 3)) if st.card else 0
-        card_block = (1 + card_h) if st.card else 0
+        card = st.card if st.card and st.card.get("kind") != "status" else None
+        card_h = max(1, min(3, (h - 6) // 3)) if card else 0
+        card_block = (1 + card_h) if card else 0
+
         prompt_lines = []
         prompt_h = 0
+        prompt_hint = 0
         if st.prompt_text is not None:
             prompt_lines = wrap_text(st.prompt_text, max(1, w - 2)) or [""]
-            prompt_h = min(len(prompt_lines), max(1, h - 4 - card_block))
-            result_h = max(1, h - 3 - card_block - prompt_h)
-        else:
-            result_h = max(1, h - 4 - card_block)
+            prompt_hint = 1
+            prompt_h = min(len(prompt_lines), max(1, h - 2 - card_block - prompt_hint))
+        tr_h = 1 if tr else 0
+        result_h = max(1, h - 1 - card_block - prompt_h - prompt_hint - tr_h)
 
         if st.result_pane != pane:
             result = "loading…" if st.result_loading else "(loading…)"
@@ -547,9 +542,7 @@ def render(st, w, h):
         for ln in lines[st.result_scroll:st.result_scroll + result_h]:
             out.append(line([(ln, "white")], w))
 
-        card_hint = ""
-        if st.card:
-            card = st.card
+        if card:
             title = card.get("kind", "").upper()
             if card.get("risk") == "danger":
                 title = "DANGER: " + (card.get("rl") or "RISKY")
@@ -570,17 +563,6 @@ def render(st, w, h):
             card_lines.extend(card.get("lines") or [])
             for ln in card_lines[:card_h]:
                 out.append(line([(ln, "white")], w))
-            can = card.get("can") or []
-            hints = []
-            if "approve" in can:
-                hints.append("a" + (" APPROVE?" if st.armed == "approve" else " approve"))
-            if "deny" in can:
-                hints.append("d deny")
-            if "interrupt" in can:
-                hints.append("i" + (" STOP?" if st.armed == "interrupt" else " stop"))
-            if "jump" in can:
-                hints.append("j focus")
-            card_hint = "  ".join(hints)
 
         if st.prompt_text is not None:
             start = max(0, len(prompt_lines) - prompt_h)
@@ -590,55 +572,43 @@ def render(st, w, h):
                 else:
                     prefix = "… " if j == 0 else "  "
                 out.append(line([(prefix + ln, "rev")], w))
-        else:
-            quick_bar = " ".join(f"{i + 1}{x}" for i, x in enumerate(QUICK_SHORT))
-            out.append(color(clip(quick_bar, w), "grey"))
-    else:
-        body_h = h - 2
-        if st.link == "connecting":
-            out.append(line([("connecting…", "yellow")], w))
-        elif st.link != "connected":
-            out.append(line([("disconnected — retrying…", "red")], w))
-        elif herdr_off:
-            out.append(line([("herdr is offline on " + st.host, "red")], w))
-        elif not agents:
-            out.append(line([("no agents", "grey")], w))
-        else:
-            vis = body_h
-            first = st.first_visible(len(agents), vis)
-            for i in range(first, min(len(agents), first + vis)):
-                a = agents[i]
-                stt = a.get("st", "unknown")
-                g = GLYPH.get(stt, "?")
-                title = st.titles.get(a.get("pane")) or a.get("name") or a.get("pane", "")
-                row = color(pad(g, 1), STATUS_COLOR.get(stt, "white")) + " " + pad(title, w - 2)
-                if i == st.selected:
-                    row = color(row, "rev")
-                out.append(row)
+            out.append(color(pad("Enter send   Esc cancel", w), "grey"))
 
-    # hint bar, pinned to the last row
-    if st.voice_state == "recording":
-        hint = "REC — v stop   Esc cancel"
-    elif st.voice_state == "transcribing":
-        hint = "transcribing..."
-    elif st.prompt_text is not None:
-        hint = "Enter send   Esc cancel"
-    elif st.quick:
-        hint = f'Enter send "{st.quick}"   Esc cancel'
-    elif st.detail_pane:
-        if card_hint:
-            hint = "f/x scroll  " + card_hint + "  Esc"
-        else:
-            hint = "f/x scroll  t view  v/p 1-6  Esc back"
+        if tr:
+            out.append(color(pad(tr, w), "grey"))
+        out = out[:h]
+        while len(out) < h:
+            out.append("")
+        return out
+
+    tr_h = 1 if tr else 0
+    body_h = max(1, h - tr_h)
+    if st.link == "connecting":
+        out.append(line([("connecting…", "yellow")], w))
+    elif st.link != "connected":
+        out.append(line([("disconnected — retrying…", "red")], w))
+    elif herdr_off:
+        out.append(line([("herdr is offline on " + st.host, "red")], w))
+    elif not agents:
+        out.append(line([("no agents", "grey")], w))
     else:
-        hint = "f/x select  Enter open  q quit"
-    if st.msg and time.time() - st.msg_at > 4:
-        st.msg = ""
-    out = out[: h - 1]
-    while len(out) < h - 1:
+        vis = body_h
+        first = st.first_visible(len(agents), vis)
+        for i in range(first, min(len(agents), first + vis)):
+            a = agents[i]
+            stt = a.get("st", "unknown")
+            g = GLYPH.get(stt, "?")
+            title = st.titles.get(a.get("pane")) or a.get("name") or a.get("pane", "")
+            row = color(pad(g, 1), STATUS_COLOR.get(stt, "white")) + " " + pad(title, w - 2)
+            if i == st.selected:
+                row = color(row, "rev")
+            out.append(row)
+    if tr:
+        out.append(color(pad(tr, w), "grey"))
+    out = out[:h]
+    while len(out) < h:
         out.append("")
-    out.append(color(pad(hint, w), "grey"))
-    return out[:h]
+    return out
 
 
 # ---- state ------------------------------------------------------------------
@@ -1280,7 +1250,8 @@ class Pager:
         if self.voice_proc and self.voice_proc.poll() is None:
             self.voice_proc.kill()
         self.st.voice_state = "idle"
-        self.st.voice_msg = "voice cancelled"
+        self.st.voice_msg = ""
+        self.st.say("voice cancelled")
 
     def _voice_worker(self, pane):
         wav = f"/tmp/cardputer-voice-{os.getpid()}.wav"
@@ -1327,7 +1298,8 @@ class Pager:
             self.st.prompt_pane = pane
             self.st.voice_msg = ""
         except Exception as e:
-            self.st.voice_msg = f"voice: {e}"
+            self.st.voice_msg = ""
+            self.st.say(f"voice: {e}")
         finally:
             self.voice_proc = None
             self.st.voice_state = "idle"

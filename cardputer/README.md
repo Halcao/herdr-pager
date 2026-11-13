@@ -22,34 +22,26 @@ so there is no bridge SSH server, no USB pairing and no port 2277.
 
 ## Screen
 
-The top band shows the target and screen (`herdr@mbp · agents` or
-`· detail`) plus the clock. `LINK`, `OFF`, `HERDR OFFLINE`, `REC` and
-`transcribing` replace it only when they matter.
+There is no permanent header or footer: the list and the result use the whole
+screen. `REC`, `transcribing`, an armed quick reply or an error appears only as
+a transient bottom line while it matters.
 
 The list is navigation only. It is sorted **blocked > done > working > idle**;
 within a group the most recently active agent comes first (transcript mtime,
-falling back to the observed state-change time). The title is the pane's
-terminal title, full width; the old trailing folder column is gone.
+falling back to the observed state-change time).
 
 ```
-                          12:34
 ◐ 新 Linux 小节点 SSH、tailscale…
 ○ 多模态模型训练负载均衡…
-f/x select  Enter open  q quit
 ```
 
 Press `Enter` on an agent to open its detail screen. The detail screen shows
-the last assistant message (no thinking/tool calls), the permission/question
-card if herdr has one, and is the only place that can record voice, send a
-prompt, or approve/deny:
+the terminal output, the permission/question/form if herdr has one, and is the
+only place that can record voice, send a prompt, or decide:
 
 ```
-                          12:34
-RESULT [recent] gemini
+RESULT [recent 6/42] gemini
 最近的终端输出…
-STATUS gemini
-1继续 2可以 3不行 4commit 5retry 6怎样
-i stop  j focus  Esc
 ```
 
 The result view is herdr's own terminal read: `agent read
@@ -81,13 +73,12 @@ FORM  Which colour?
   2. Blue  Choose blue
   3. Type something.
   4. Chat about this
-f/x move  Enter select  Esc back
 ```
 
-Permission prompts are still the pager's own `a approve` / `d deny` card, not
-this form view. A free-text option such as "Type something." opens an input in
-Claude Code; the pager only selects listed options, so use the terminal for
-free text.
+`f/x` moves, `Enter` selects, `Esc` leaves the detail. Permission prompts are
+still the pager's own `a approve` / `d deny` card, not this form view. A
+free-text option such as "Type something." opens an input in Claude Code; the
+pager only selects listed options, so use the terminal for free text.
 
 Each `f`/`x` sends exactly one `up`/`down` through a single serialized queue,
 and the one-second detection poll does not overwrite your selection for 1.2 s
